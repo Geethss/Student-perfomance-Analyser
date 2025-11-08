@@ -29,6 +29,8 @@ class GeminiAnalyzer:
             "top_k": 40,
             "max_output_tokens": 8192,
         }
+        self.last_question_reasoning: List[Dict[str, Any]] = []
+        self.last_mapping_notes: List[str] = []
     
     def extract_concepts(self, analysis_sheet_images: List[Image.Image]) -> List[str]:
         """
@@ -73,7 +75,7 @@ class GeminiAnalyzer:
         self, 
         question_paper_images: List[Image.Image],
         concepts: List[str]
-    ) -> Dict[str, List[int]]:
+    ) -> Dict[str, Any]:
         """
         Analyze question paper to map questions to concepts
         
@@ -82,7 +84,10 @@ class GeminiAnalyzer:
             concepts: List of concept names to look for
             
         Returns:
-            Dictionary mapping concept names to list of question numbers
+            Dictionary containing:
+                - "concept_map": Mapping of concept names to question numbers
+                - "question_reasoning": Step-by-step reasoning per question
+                - "evaluation_notes": Optional high-level reasoning notes
         """
         concepts_str = "\n".join([f"{i+1}. {concept}" for i, concept in enumerate(concepts)])
         
@@ -92,19 +97,47 @@ class GeminiAnalyzer:
         Here are the concepts to look for:
         {concepts_str}
         
-        For each concept, identify ALL question numbers that test or require that concept.
-        A single question may test multiple concepts.
+        Instructions:
+        1. For EACH concept, list ALL question numbers that require or test that concept.
+        2. Every concept from the list must appear in the output, even if no questions map to it (use an empty list).
+        3. For EVERY question in the paper, provide a short structured explanation of how you evaluated the question, including:
+           - A one sentence summary of what the question is asking.
+           - The concepts that apply to that question with a short rationale and a confidence rating (low/medium/high).
+           - Optionally, any concepts you considered but rejected, with a short reason.
+        4. Provide optional high-level evaluation notes capturing your overall reasoning steps.
         
-        Return your analysis as a JSON object where keys are concept names and values are arrays of question numbers:
+        Return ONLY a valid JSON object with the following shape:
         {{
-            "Basic Formulas": [1, 3, 5],
-            "Application of Formulae": [2, 4, 6, 8],
-            ...
+            "concept_map": {{
+                "Concept Name": [question_numbers...],
+                ...
+            }},
+            "question_reasoning": [
+                {{
+                    "question": <number>,
+                    "summary": "<short description of the question>",
+                    "concept_alignments": [
+                        {{
+                            "concept": "<concept name>",
+                            "rationale": "<why this concept applies>",
+                            "confidence": "low|medium|high"
+                        }}
+                    ],
+                    "considered_but_rejected": [
+                        {{
+                            "concept": "<concept name>",
+                            "reason": "<why it was rejected>"
+                        }}
+                    ]
+                }}
+            ],
+            "evaluation_notes": [
+                "<high-level note about your reasoning process>",
+                ...
+            ]
         }}
         
-        Include ALL concepts from the list, even if no questions test them (use empty array []).
-        Be thorough - analyze every question carefully.
-        Return ONLY the JSON object, nothing else.
+        Always return valid JSON only. Do not wrap the response in markdown code fences.
         """
         
         try:
@@ -120,8 +153,27 @@ class GeminiAnalyzer:
             elif response_text.startswith("```"):
                 response_text = response_text.split("```")[1].split("```")[0].strip()
             
-            concept_questions = json.loads(response_text)
-            return concept_questions
+            concept_analysis = json.loads(response_text)
+            
+            # Ensure required keys exist
+            if "concept_map" not in concept_analysis:
+                raise ValueError("Response missing 'concept_map'")
+            if not isinstance(concept_analysis["concept_map"], dict):
+                raise ValueError("'concept_map' must be an object/dictionary")
+            if "question_reasoning" not in concept_analysis:
+                concept_analysis["question_reasoning"] = []
+            if "evaluation_notes" not in concept_analysis:
+                concept_analysis["evaluation_notes"] = []
+            
+            # Guarantee all concepts are present in the concept_map
+            for concept in concepts:
+                concept_analysis["concept_map"].setdefault(concept, [])
+            
+            # Store latest reasoning metadata for optional external access
+            self.last_question_reasoning = concept_analysis["question_reasoning"]
+            self.last_mapping_notes = concept_analysis["evaluation_notes"]
+            
+            return concept_analysis
         except Exception as e:
             raise ValueError(f"Error analyzing question paper: {str(e)}")
     
@@ -142,12 +194,18 @@ class GeminiAnalyzer:
             question_numbers: List of question numbers that test this concept
             
         Returns:
-            Dictionary with 'mistakes' (list of Q numbers) and 'details' (dict of Q: error description)
+            Dictionary containing:
+                - 'mistakes': list of question numbers with mistakes
+                - 'details': mapping of question number (as string) to mistake description
+                - 'reasoning': structured reasoning steps per question (optional)
+                - 'evaluation_notes': optional list of high-level observations
         """
         if not question_numbers:
             return {
                 "mistakes": [],
-                "details": {}
+                "details": {},
+                "reasoning": [],
+                "evaluation_notes": []
             }
         
         questions_str = ", ".join(map(str, question_numbers))
@@ -158,25 +216,31 @@ class GeminiAnalyzer:
         Questions that test this concept: {questions_str}
         
         Compare the student's answers (in the answer sheet) with the correct approach for each question.
-        Specifically focus on how the student applied (or failed to apply) the concept: "{concept}"
+        Focus specifically on how the student applied (or failed to apply) the concept: "{concept}".
         
-        For each question:
-        1. Did the student make a mistake related to this concept?
-        2. If yes, what exactly was the mistake?
+        For each question, determine whether a mistake related to this concept occurred and describe the reasoning process.
         
-        Return your analysis as a JSON object:
+        Return ONLY a valid JSON object with the following structure:
         {{
-            "mistakes": [2, 5, 8],  // Question numbers where mistakes were made
+            "mistakes": [<question numbers where the student made a concept-related mistake>],
             "details": {{
-                "2": "Wrong integration of tan²x - forgot to use substitution",
-                "5": "Incorrect formula application - used wrong power rule",
-                "8": "Failed to apply chain rule during integration"
-            }}
+                "<question number>": "<concise description of the mistake and what should have been done>"
+            }},
+            "reasoning": [
+                {{
+                    "question": <number>,
+                    "observation": "<what you saw in the student's answer>",
+                    "concept_evaluation": "<how the concept was (or should have been) applied>",
+                    "conclusion": "<did they use the concept correctly or make a mistake?>",
+                    "confidence": "low|medium|high"
+                }}
+            ],
+            "evaluation_notes": [
+                "<optional high-level note about the concept performance>"
+            ]
         }}
         
-        Be specific about the mistakes. Only include questions where the student made errors related to "{concept}".
-        If no mistakes were made, return empty arrays/objects.
-        Return ONLY the JSON object, nothing else.
+        Use empty lists/objects where appropriate. Do not include markdown fences or explanatory text outside the JSON.
         """
         
         try:
@@ -196,6 +260,14 @@ class GeminiAnalyzer:
                 response_text = response_text.split("```")[1].split("```")[0].strip()
             
             performance = json.loads(response_text)
+            
+            if not isinstance(performance, dict):
+                raise ValueError("Performance response must be a JSON object")
+            performance.setdefault("mistakes", [])
+            performance.setdefault("details", {})
+            performance.setdefault("reasoning", [])
+            performance.setdefault("evaluation_notes", [])
+            
             return performance
         except Exception as e:
             raise ValueError(f"Error analyzing student performance for {concept}: {str(e)}")
@@ -217,7 +289,15 @@ class GeminiAnalyzer:
             progress_callback: Optional callback function for progress updates
             
         Returns:
-            List of dictionaries with concept analysis results
+            List of dictionaries with concept analysis results. Each dictionary includes:
+                - concept: Concept name
+                - tested_count: Number of questions mapped to the concept
+                - mistakes_count: Number of mistakes detected for the concept
+                - mistake_questions: List of question numbers with mistakes
+                - details: Dict mapping question numbers (str) to mistake descriptions
+                - concept_reasoning: Structured reasoning for how each mapped question relates to the concept
+                - performance_reasoning: Reasoning about the student's performance per question
+                - performance_notes: Optional high-level notes about the student's performance
         """
         results = []
         
@@ -229,7 +309,9 @@ class GeminiAnalyzer:
         # Step 2: Analyze question paper
         if progress_callback:
             progress_callback(f"Analyzing question paper for {len(concepts)} concepts...")
-        concept_questions = self.analyze_question_paper(question_paper_images, concepts)
+        concept_analysis = self.analyze_question_paper(question_paper_images, concepts)
+        concept_questions = concept_analysis.get("concept_map", {})
+        question_reasoning = concept_analysis.get("question_reasoning", [])
         
         # Step 3: Analyze student performance for each concept
         total_concepts = len(concepts)
@@ -237,7 +319,17 @@ class GeminiAnalyzer:
             if progress_callback:
                 progress_callback(f"Analyzing concept {idx+1}/{total_concepts}: {concept}")
             
-            question_numbers = concept_questions.get(concept, [])
+            question_numbers_raw = concept_questions.get(concept, [])
+            question_numbers: List[int] = []
+            for number in question_numbers_raw:
+                if isinstance(number, int):
+                    question_numbers.append(number)
+                elif isinstance(number, str) and number.strip().isdigit():
+                    question_numbers.append(int(number.strip()))
+                else:
+                    question_numbers.append(number)
+            
+            concept_reasoning = self._extract_concept_reasoning(question_reasoning, concept)
             
             if not question_numbers:
                 # Concept not tested
@@ -246,7 +338,10 @@ class GeminiAnalyzer:
                     "tested_count": 0,
                     "mistakes_count": 0,
                     "mistake_questions": [],
-                    "details": {}
+                    "details": {},
+                    "concept_reasoning": concept_reasoning,
+                    "performance_reasoning": [],
+                    "performance_notes": []
                 })
             else:
                 # Analyze performance
@@ -257,12 +352,25 @@ class GeminiAnalyzer:
                     question_numbers
                 )
                 
+                mistakes_raw = performance.get("mistakes", [])
+                mistake_questions: List[int] = []
+                for number in mistakes_raw:
+                    if isinstance(number, int):
+                        mistake_questions.append(number)
+                    elif isinstance(number, str) and number.strip().isdigit():
+                        mistake_questions.append(int(number.strip()))
+                    else:
+                        mistake_questions.append(number)
+                
                 results.append({
                     "concept": concept,
                     "tested_count": len(question_numbers),
-                    "mistakes_count": len(performance["mistakes"]),
-                    "mistake_questions": performance["mistakes"],
-                    "details": performance["details"]
+                    "mistakes_count": len(mistake_questions),
+                    "mistake_questions": mistake_questions,
+                    "details": performance["details"],
+                    "concept_reasoning": concept_reasoning,
+                    "performance_reasoning": performance.get("reasoning", []),
+                    "performance_notes": performance.get("evaluation_notes", [])
                 })
             
             # Small delay to avoid rate limiting
@@ -272,6 +380,70 @@ class GeminiAnalyzer:
             progress_callback("Analysis complete!")
         
         return results
+    
+    @staticmethod
+    def _extract_concept_reasoning(
+        question_reasoning: List[Dict[str, Any]],
+        concept: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter question-level reasoning down to the steps relevant to a specific concept.
+        
+        Args:
+            question_reasoning: List of reasoning objects from analyze_question_paper
+            concept: Concept name to filter for
+        
+        Returns:
+            Filtered list of reasoning entries specific to the concept
+        """
+        filtered_reasoning: List[Dict[str, Any]] = []
+        
+        for entry in question_reasoning or []:
+            concept_alignments = entry.get("concept_alignments", [])
+            if not isinstance(concept_alignments, list):
+                continue
+            
+            matching_alignments = [
+                alignment for alignment in concept_alignments
+                if isinstance(alignment, dict) and alignment.get("concept") == concept
+            ]
+            
+            if not matching_alignments:
+                continue
+            
+            question_number = entry.get("question")
+            if isinstance(question_number, str) and question_number.strip().isdigit():
+                question_number = int(question_number.strip())
+            
+            # Determine overall confidence for this question-concept pair
+            confidence_levels = [a.get("confidence", "medium") for a in matching_alignments]
+            if "high" in confidence_levels:
+                overall_confidence = "high"
+            elif "medium" in confidence_levels:
+                overall_confidence = "medium"
+            else:
+                overall_confidence = "low"
+            
+            filtered_entry = {
+                "question": question_number,
+                "summary": entry.get("summary", ""),
+                "concept_alignments": matching_alignments,
+                "confidence": overall_confidence
+            }
+            
+            if "considered_but_rejected" in entry:
+                rejected = entry.get("considered_but_rejected", [])
+                # Extract just the concept names for display
+                if isinstance(rejected, list):
+                    rejected_names = [
+                        r.get("concept", "") if isinstance(r, dict) else str(r)
+                        for r in rejected
+                    ]
+                    filtered_entry["considered_but_rejected"] = [r for r in rejected_names if r]
+            
+            filtered_reasoning.append(filtered_entry)
+        
+        return filtered_reasoning
     
     @staticmethod
     def format_response_1(result: Dict[str, Any]) -> str:

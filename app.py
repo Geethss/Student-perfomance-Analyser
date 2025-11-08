@@ -17,7 +17,6 @@ load_dotenv()
 # Page configuration
 st.set_page_config(
     page_title="Student Performance Analyzer",
-    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -290,9 +289,58 @@ def main():
                 st.markdown("**Performance Summary:**")
                 st.write(GeminiAnalyzer.format_response_1(result))
                 
+                # Show concept reasoning (how Gemini mapped questions to this concept)
+                if result.get("concept_reasoning"):
+                    st.markdown("---")
+                    st.markdown("**How Gemini Mapped Questions to This Concept:**")
+                    for reasoning in result["concept_reasoning"]:
+                        q_num = reasoning.get("question", "?")
+                        summary = reasoning.get("summary", "")
+                        confidence = reasoning.get("confidence", "medium")
+                        
+                        st.markdown(f"**Question {q_num}** *({confidence} confidence)*")
+                        st.caption(summary)
+                        
+                        # Show concept alignments
+                        alignments = reasoning.get("concept_alignments", [])
+                        for alignment in alignments:
+                            if alignment.get("concept") == result["concept"]:
+                                st.info(f"**Rationale:** {alignment.get('rationale', 'N/A')}")
+                        
+                        # Show rejected concepts if any
+                        rejected = reasoning.get("considered_but_rejected", [])
+                        if rejected:
+                            st.caption(f"Also considered but rejected: {', '.join(rejected)}")
+                
                 if result["mistakes_count"] > 0:
+                    st.markdown("---")
                     st.markdown("**Detailed Mistake Analysis:**")
                     st.write(GeminiAnalyzer.format_response_2(result))
+                    
+                    # Show performance reasoning (how Gemini evaluated the student's answers)
+                    if result.get("performance_reasoning"):
+                        st.markdown("---")
+                        st.markdown("**How Gemini Evaluated Each Answer:**")
+                        for perf_reasoning in result["performance_reasoning"]:
+                            q_num = perf_reasoning.get("question", "?")
+                            observation = perf_reasoning.get("observation", "")
+                            concept_eval = perf_reasoning.get("concept_evaluation", "")
+                            conclusion = perf_reasoning.get("conclusion", "")
+                            confidence = perf_reasoning.get("confidence", "medium")
+                            
+                            with st.container():
+                                st.markdown(f"**Question {q_num}** *({confidence} confidence)*")
+                                st.markdown(f"**Observation:** {observation}")
+                                st.markdown(f"**Concept Application:** {concept_eval}")
+                                st.markdown(f"**Conclusion:** {conclusion}")
+                                st.markdown("")
+                
+                # Show evaluation notes if any
+                if result.get("performance_notes"):
+                    st.markdown("---")
+                    st.markdown("**Additional Evaluation Notes:**")
+                    for note in result["performance_notes"]:
+                        st.info(note)
         
         # Download buttons
         st.markdown("---")

@@ -123,9 +123,10 @@ class ReportGenerator:
         ws.column_dimensions['B'].width = 40
         ws.column_dimensions['C'].width = 30
         ws.column_dimensions['D'].width = 60
+        ws.column_dimensions['E'].width = 70
         
         # Write headers
-        headers = ["Concept No.", "Concept (With Explanation)", "Example", "Status"]
+        headers = ["Concept No.", "Concept (With Explanation)", "Example", "Status", "AI Evaluation Process"]
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num, value=header)
             cell.font = header_font
@@ -159,8 +160,15 @@ class ReportGenerator:
             cell.alignment = cell_alignment
             cell.border = border
             
+            # AI Evaluation Process
+            evaluation_text = ReportGenerator._format_evaluation_process(result)
+            cell = ws.cell(row=idx, column=5, value=evaluation_text)
+            cell.alignment = cell_alignment
+            cell.border = border
+            
             # Set row height based on content
-            ws.row_dimensions[idx].height = max(60, len(status_text.split('\n')) * 15)
+            total_lines = max(len(status_text.split('\n')), len(evaluation_text.split('\n')))
+            ws.row_dimensions[idx].height = max(60, total_lines * 15)
         
         # Freeze header row
         ws.freeze_panes = "A2"
@@ -241,6 +249,15 @@ class ReportGenerator:
                 response_2 = ReportGenerator.sanitize_for_pdf(response_2)
                 pdf.multi_cell(0, 5, response_2)
             
+            # AI Evaluation Process
+            evaluation_text = ReportGenerator._format_evaluation_process(result)
+            if evaluation_text and evaluation_text != "No evaluation data available":
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 6, "AI Evaluation Process:", ln=True)
+                pdf.set_font("Helvetica", "", 9)
+                evaluation_text = ReportGenerator.sanitize_for_pdf(evaluation_text)
+                pdf.multi_cell(0, 4, evaluation_text)
+            
             pdf.ln(5)
             
             # Page break if needed
@@ -277,6 +294,63 @@ class ReportGenerator:
             details_list.append(f"  - Q{q_num}: {detail}")
         
         return "\n".join(details_list)
+    
+    @staticmethod
+    def _format_evaluation_process(result: Dict[str, Any]) -> str:
+        """Format AI evaluation process showing how Gemini analyzed the concept"""
+        sections = []
+        
+        # Section 1: How questions were mapped to this concept
+        concept_reasoning = result.get("concept_reasoning", [])
+        if concept_reasoning:
+            sections.append("=== QUESTION-TO-CONCEPT MAPPING ===")
+            for reasoning in concept_reasoning:
+                q_num = reasoning.get("question", "?")
+                summary = reasoning.get("summary", "N/A")
+                confidence = reasoning.get("confidence", "medium").upper()
+                
+                sections.append(f"\nQuestion {q_num} [{confidence} CONFIDENCE]:")
+                sections.append(f"  Summary: {summary}")
+                
+                # Show concept alignments
+                alignments = reasoning.get("concept_alignments", [])
+                for alignment in alignments:
+                    if alignment.get("concept") == result["concept"]:
+                        sections.append(f"  Rationale: {alignment.get('rationale', 'N/A')}")
+                
+                # Show rejected concepts
+                rejected = reasoning.get("considered_but_rejected", [])
+                if rejected:
+                    sections.append(f"  Also considered: {', '.join(rejected)}")
+        
+        # Section 2: How student performance was evaluated
+        performance_reasoning = result.get("performance_reasoning", [])
+        if performance_reasoning:
+            if sections:
+                sections.append("\n")
+            sections.append("=== STUDENT ANSWER EVALUATION ===")
+            for perf in performance_reasoning:
+                q_num = perf.get("question", "?")
+                observation = perf.get("observation", "N/A")
+                concept_eval = perf.get("concept_evaluation", "N/A")
+                conclusion = perf.get("conclusion", "N/A")
+                confidence = perf.get("confidence", "medium").upper()
+                
+                sections.append(f"\nQuestion {q_num} [{confidence} CONFIDENCE]:")
+                sections.append(f"  Observation: {observation}")
+                sections.append(f"  Concept Application: {concept_eval}")
+                sections.append(f"  Conclusion: {conclusion}")
+        
+        # Section 3: Additional notes
+        performance_notes = result.get("performance_notes", [])
+        if performance_notes:
+            if sections:
+                sections.append("\n")
+            sections.append("=== EVALUATION NOTES ===")
+            for note in performance_notes:
+                sections.append(f"  - {note}")
+        
+        return "\n".join(sections) if sections else "No evaluation data available"
     
     @staticmethod
     def create_downloadable_excel(results: List[Dict[str, Any]], filename: str = "analysis_report.xlsx") -> tuple:
