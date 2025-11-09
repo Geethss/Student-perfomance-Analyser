@@ -59,6 +59,18 @@ st.markdown("""
         border-radius: 5px;
         margin: 1rem 0;
     }
+    /* Better formatting for mathematical content */
+    .stMarkdown p {
+        white-space: pre-wrap;
+        line-height: 1.8;
+    }
+    /* Ensure equations are displayed clearly */
+    code {
+        font-family: 'Courier New', monospace;
+        background-color: #f5f5f5;
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -79,7 +91,7 @@ def main():
     
     # Header
     st.markdown('<div class="main-header">Student Performance Analyzer</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">AI-Powered Concept-Wise Performance Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">AI-Powered Question-by-Question Performance Analysis</div>', unsafe_allow_html=True)
     
     # Sidebar for Configuration
     with st.sidebar:
@@ -99,43 +111,29 @@ def main():
         st.markdown("---")
         st.markdown("### Instructions")
         st.markdown("""
-        1. Upload all required files (can upload multiple images per document)
+        1. Upload question paper and answer sheet (can upload multiple images per document)
         2. Click 'Analyze Performance'
-        3. Download the reports
+        3. Review each question's analysis
+        4. Download the reports
         """)
         
         st.markdown("---")
         st.markdown("### About")
         st.markdown("""
         This tool analyzes student performance by:
-        - Extracting concepts from analysis sheet
-        - Mapping questions to concepts
-        - Identifying mistakes in answers
-        - Generating detailed reports
+        - Extracting questions from the question paper
+        - Showing Gemini's solution approach
+        - Comparing with student's answers
+        - Identifying and explaining mistakes
         """)
     
     # Main content area
     st.markdown("### Upload Documents")
     
-    # File uploaders in columns
-    col1, col2, col3 = st.columns(3)
+    # File uploaders in columns (only 2 now)
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-        st.markdown("**Analysis Sheet**")
-        st.caption("Upload the concept list (can upload multiple files)")
-        analysis_sheets = st.file_uploader(
-            "Analysis Sheet",
-            type=["png", "jpg", "jpeg", "pdf"],
-            key="analysis_sheet",
-            label_visibility="collapsed",
-            accept_multiple_files=True
-        )
-        if analysis_sheets:
-            st.success(f"{len(analysis_sheets)} file(s) uploaded")
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
         st.markdown('<div class="upload-section">', unsafe_allow_html=True)
         st.markdown("**Question Paper**")
         st.caption("Upload the exam questions (can upload multiple files)")
@@ -150,7 +148,7 @@ def main():
             st.success(f"{len(question_papers)} file(s) uploaded")
         st.markdown('</div>', unsafe_allow_html=True)
     
-    with col3:
+    with col2:
         st.markdown('<div class="upload-section">', unsafe_allow_html=True)
         st.markdown("**Answer Sheet**")
         st.caption("Upload student's solutions (can upload multiple files)")
@@ -183,8 +181,8 @@ def main():
             st.error("Error: Google Gemini API key not found. Please set GOOGLE_API_KEY environment variable.")
             return
         
-        if not all([analysis_sheets, question_papers, answer_sheets]):
-            st.error("Error: Please upload all three required documents")
+        if not all([question_papers, answer_sheets]):
+            st.error("Error: Please upload both question paper and answer sheet")
             return
         
         try:
@@ -203,11 +201,6 @@ def main():
                 status_text.text("Processing documents...")
                 progress_bar.progress(10)
                 
-                analysis_images = []
-                for file in analysis_sheets:
-                    analysis_images.extend(processor.process_uploaded_file(file))
-                progress_bar.progress(20)
-                
                 question_images = []
                 for file in question_papers:
                     question_images.extend(processor.process_uploaded_file(file))
@@ -216,23 +209,22 @@ def main():
                 answer_images = []
                 for file in answer_sheets:
                     answer_images.extend(processor.process_uploaded_file(file))
-                progress_bar.progress(40)
+                progress_bar.progress(50)
                 
                 status_text.text("Documents processed successfully")
                 
                 # Initialize Gemini analyzer
                 status_text.text("Initializing AI model...")
                 analyzer = GeminiAnalyzer(api_key, model_name=model_choice)
-                progress_bar.progress(50)
+                progress_bar.progress(60)
                 
                 # Define progress callback
                 def update_progress(message):
                     status_text.text(f"{message}")
                 
                 # Perform analysis
-                status_text.text("Analyzing performance (this may take a few minutes)...")
-                results = analyzer.analyze_all_concepts(
-                    analysis_images,
+                status_text.text("Analyzing questions and answers (this may take a few minutes)...")
+                results = analyzer.analyze_questions_and_answers(
                     question_images,
                     answer_images,
                     progress_callback=update_progress
@@ -269,78 +261,59 @@ def main():
         
         # Summary statistics
         results = st.session_state.results
-        total_concepts = len(results)
-        tested_concepts = sum(1 for r in results if r["tested_count"] > 0)
-        total_mistakes = sum(r["mistakes_count"] for r in results)
+        total_questions = len(results)
+        questions_with_mistakes = sum(1 for r in results if r.get("has_mistake", False))
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            st.metric("Total Concepts", total_concepts)
+            st.metric("Total Questions Analyzed", total_questions)
         with col2:
-            st.metric("Concepts Tested", tested_concepts)
-        with col3:
-            st.metric("Total Mistakes", total_mistakes)
+            st.metric("Questions with Mistakes", questions_with_mistakes)
         
-        # Detailed results in expandable sections
-        st.markdown("### Detailed Analysis by Concept")
+        # Detailed results for each question
+        st.markdown("### Question-by-Question Analysis")
         
         for idx, result in enumerate(results, 1):
-            with st.expander(f"{idx}. {result['concept']} - {result['tested_count']} questions, {result['mistakes_count']} mistakes"):
-                st.markdown("**Performance Summary:**")
-                st.write(GeminiAnalyzer.format_response_1(result))
+            question_num = result.get("question_number", idx)
+            has_mistake = result.get("has_mistake", False)
+            
+            # Color-code the expander based on whether there's a mistake
+            status_text = "Mistake Found" if has_mistake else "Correct"
+            
+            with st.expander(f"Question {question_num} - {status_text}"):
+                # 1. Display the Question
+                st.markdown("### 1. Question")
+                question_text = result.get("question_text", "Question text not extracted")
+                st.markdown("---")
+                st.write(question_text)
                 
-                # Show concept reasoning (how Gemini mapped questions to this concept)
-                if result.get("concept_reasoning"):
-                    st.markdown("---")
-                    st.markdown("**How Gemini Mapped Questions to This Concept:**")
-                    for reasoning in result["concept_reasoning"]:
-                        q_num = reasoning.get("question", "?")
-                        summary = reasoning.get("summary", "")
-                        confidence = reasoning.get("confidence", "medium")
-                        
-                        st.markdown(f"**Question {q_num}** *({confidence} confidence)*")
-                        st.caption(summary)
-                        
-                        # Show concept alignments
-                        alignments = reasoning.get("concept_alignments", [])
-                        for alignment in alignments:
-                            if alignment.get("concept") == result["concept"]:
-                                st.info(f"**Rationale:** {alignment.get('rationale', 'N/A')}")
-                        
-                        # Show rejected concepts if any
-                        rejected = reasoning.get("considered_but_rejected", [])
-                        if rejected:
-                            st.caption(f"Also considered but rejected: {', '.join(rejected)}")
+                st.markdown("---")
                 
-                if result["mistakes_count"] > 0:
-                    st.markdown("---")
-                    st.markdown("**Detailed Mistake Analysis:**")
-                    st.write(GeminiAnalyzer.format_response_2(result))
-                    
-                    # Show performance reasoning (how Gemini evaluated the student's answers)
-                    if result.get("performance_reasoning"):
-                        st.markdown("---")
-                        st.markdown("**How Gemini Evaluated Each Answer:**")
-                        for perf_reasoning in result["performance_reasoning"]:
-                            q_num = perf_reasoning.get("question", "?")
-                            observation = perf_reasoning.get("observation", "")
-                            concept_eval = perf_reasoning.get("concept_evaluation", "")
-                            conclusion = perf_reasoning.get("conclusion", "")
-                            confidence = perf_reasoning.get("confidence", "medium")
-                            
-                            with st.container():
-                                st.markdown(f"**Question {q_num}** *({confidence} confidence)*")
-                                st.markdown(f"**Observation:** {observation}")
-                                st.markdown(f"**Concept Application:** {concept_eval}")
-                                st.markdown(f"**Conclusion:** {conclusion}")
-                                st.markdown("")
+                # 2. Show how Gemini solves it
+                st.markdown("### 2. How Gemini Solves This")
+                st.markdown("---")
+                gemini_solution = result.get("gemini_solution", "Solution not available")
+                # Display solution with proper line breaks for equations
+                st.write(gemini_solution)
                 
-                # Show evaluation notes if any
-                if result.get("performance_notes"):
-                    st.markdown("---")
-                    st.markdown("**Additional Evaluation Notes:**")
-                    for note in result["performance_notes"]:
-                        st.info(note)
+                st.markdown("---")
+                
+                # 3. Show the student's answer
+                st.markdown("### 3. Student's Answer")
+                st.markdown("---")
+                student_answer = result.get("student_answer", "Student answer not extracted")
+                st.write(student_answer)
+                
+                st.markdown("---")
+                
+                # 4. Show the mistake (if any)
+                st.markdown("### 4. Mistake Done")
+                st.markdown("---")
+                if has_mistake:
+                    mistake_description = result.get("mistake_description", "Mistake detected but not described")
+                    st.error(f"**Mistake:** {mistake_description}")
+                else:
+                    st.success("**No mistakes found.** The student's answer is correct!")
         
         # Download buttons
         st.markdown("---")
